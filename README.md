@@ -24,6 +24,7 @@ The official Base docs show how to deploy a B20 token using Foundry (a terminal-
 3. Open `http://localhost:8000/deploy-b20-on-base.html` in your browser.
 4. Connect your wallet (make sure it's set to Base Mainnet).
 5. Fill in a token name, symbol, decimals, initial mint amount, and a unique salt.
+   > **Important:** the salt must be different every time you deploy a new token. It can be any short piece of text, if you reuse one that's already been used (even from a failed or cancelled attempt), the deploy will revert with a `TokenAlreadyExists` error. Just change it to something new (e.g. add a number or date) and try again.
 6. Click Deploy, confirm the two wallet popups (deploy, then mint).
 
 Total cost is typically under a cent in gas.
