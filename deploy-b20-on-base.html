@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Deploy a B20 Token on Base (wallet-signed, no private key)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; background: #0A0B0D; color: #EAEFF7; }
+  h1 { font-size: 22px; }
+  label { display: block; margin-top: 16px; font-size: 14px; color: #9AA5B4; }
+  input, select { width: 100%; padding: 10px; margin-top: 4px; border-radius: 8px; border: 1px solid #2A3140; background: #12151C; color: #fff; box-sizing: border-box; }
+  button { margin-top: 24px; padding: 12px 20px; border-radius: 10px; border: none; background: #1652F0; color: #fff; font-weight: 700; cursor: pointer; font-size: 15px; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #connectBtn.connected { background: #12151C; border: 1px solid #2A3140; color: #4ADE80; cursor: default; display: flex; align-items: center; gap: 8px; }
+  #connectBtn.connected::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #4ADE80; display: inline-block; }
+  #log { margin-top: 24px; padding: 14px; background: #12151C; border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-all; min-height: 40px; }
+  .ok { color: #4ADE80; }
+  .err { color: #F87171; }
+  .hint { font-size: 12px; color: #6B7686; margin-top: 4px; }
+  a { color: #6EA8FF; }
+</style>
+</head>
+<body>
+
+<h1>Deploy a B20 Token on Base</h1>
+<p class="hint">This page runs entirely on your own computer. It never asks for or sees your private key. Every transaction is signed inside your own wallet (MetaMask, Rabby, etc). Calls the official B20 Factory precompile at <code>0xB20f000000000000000000000000000000000000</code>, the same address published in Base's official docs.</p>
+
+<button id="connectBtn">Connect Wallet</button>
+
+<label>Token name</label>
+<input id="name" placeholder="My Token" value="My Token">
+
+<label>Token symbol</label>
+<input id="symbol" placeholder="MYT" value="MYT">
+
+<label>Decimals (6 to 18)</label>
+<input id="decimals" type="number" min="6" max="18" value="18">
+
+<label>Initial mint amount (in whole tokens)</label>
+<input id="mintAmount" type="number" value="1000000">
+
+<label>Salt (unique text, change this for every new token)</label>
+<input id="salt" value="my-first-b20">
+
+<button id="deployBtn" disabled>Deploy Token</button>
+
+<div id="log">Connect your wallet to begin.</div>
+
+<script>
+const FACTORY_ADDRESS = "0xB20f000000000000000000000000000000000000";
+const BASE_CHAIN_ID = 8453n;
+const MINT_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINT_ROLE"));
+
+const FACTORY_ABI = [
+  "function createB20(uint8 variant, bytes32 salt, bytes params, bytes[] initCalls) external returns (address token)",
+  "event B20Created(address indexed token, uint8 indexed variant, string name, string symbol, uint8 decimals, bytes variantEventParams)"
+];
+const MINT_ABI = ["function mint(address to, uint256 amount)"];
+const GRANT_ROLE_ABI = ["function grantRole(bytes32 role, address account)"];
+
+let provider, signer, userAddress;
+
+const logEl = document.getElementById("log");
+function log(msg, cls) {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function short(addr) { return addr.slice(0, 6) + "..." + addr.slice(-4); }
+
+document.getElementById("connectBtn").onclick = async () => {
+  if (!window.ethereum) {
+    log("No wallet extension found. Install MetaMask or Rabby first.", "err");
+    return;
+  }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = await provider.getSigner();
+    userAddress = await signer.getAddress();
+
+    const network = await provider.getNetwork();
+    if (network.chainId !== BASE_CHAIN_ID) {
+      log("Wrong network. Please switch your wallet to Base Mainnet (chain ID 8453) and reconnect.", "err");
+      return;
+    }
+
+    const btn = document.getElementById("connectBtn");
+    btn.textContent = short(userAddress);
+    btn.classList.add("connected");
+    document.getElementById("deployBtn").disabled = false;
+    log("Wallet connected on Base Mainnet. Ready to deploy.", "ok");
+  } catch (e) {
+    log("Connection failed: " + e.message, "err");
+  }
+};
+
+document.getElementById("deployBtn").onclick = async () => {
+  const deployBtn = document.getElementById("deployBtn");
+  try {
+    const name = document.getElementById("name").value.trim();
+    const symbol = document.getElementById("symbol").value.trim();
+    const decimals = parseInt(document.getElementById("decimals").value, 10);
+    const mintAmount = document.getElementById("mintAmount").value.trim();
+    const saltText = document.getElementById("salt").value.trim();
+
+    if (!name || !symbol || !saltText) {
+      log("Please fill in name, symbol, and salt.", "err");
+      return;
+    }
+
+    deployBtn.disabled = true;
+    log("Building transaction...");
+
+    const salt = ethers.keccak256(ethers.toUtf8Bytes(saltText));
+
+    // Struct must be encoded as a single tuple parameter (matches Solidity's
+    // abi.encode(struct) semantics: the whole struct sits behind one leading
+    // offset word since it contains dynamic fields like strings).
+    const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+    const params = abiCoder.encode(
+      ["tuple(uint8 version, string name, string symbol, address initialAdmin, uint8 decimals)"],
+      [[1, name, symbol, userAddress, decimals]]
+    );
+
+    const grantRoleIface = new ethers.Interface(GRANT_ROLE_ABI);
+    const grantRoleCall = grantRoleIface.encodeFunctionData("grantRole", [MINT_ROLE, userAddress]);
+    const initCalls = [grantRoleCall];
+
+    const factoryIface = new ethers.Interface(FACTORY_ABI);
+    const data = factoryIface.encodeFunctionData("createB20", [0, salt, params, initCalls]);
+
+    log("Please confirm the deploy transaction in your wallet popup...");
+    const tx = await signer.sendTransaction({ to: FACTORY_ADDRESS, data: data });
+
+    log("Transaction sent: " + tx.hash);
+    log("Waiting for confirmation...");
+    const receipt = await provider.waitForTransaction(tx.hash);
+
+    if (receipt.status !== 1) {
+      log("Transaction reverted. Check the salt is unique and try again.", "err");
+      deployBtn.disabled = false;
+      return;
+    }
+
+    log("Token deployed! https://basescan.org/tx/" + tx.hash, "ok");
+
+    // Find the new token address from the B20Created event in this receipt.
+    let tokenAddress = null;
+    for (const logEntry of receipt.logs) {
+      try {
+        const parsed = factoryIface.parseLog(logEntry);
+        if (parsed && parsed.name === "B20Created") {
+          tokenAddress = parsed.args.token;
+          break;
+        }
+      } catch (_) { /* not our event, skip */ }
+    }
+
+    if (!tokenAddress) {
+      log("Could not find token address in receipt logs. Check Basescan manually.", "err");
+      deployBtn.disabled = false;
+      return;
+    }
+
+    log("Token address: " + tokenAddress, "ok");
+    log("https://basescan.org/address/" + tokenAddress, "ok");
+
+    // Automatically chain the mint transaction (MINT_ROLE was already granted
+    // to you in the deploy transaction's initCalls above).
+    if (mintAmount && Number(mintAmount) > 0) {
+      log("Please confirm the mint transaction in your wallet popup...");
+      const mintIface = new ethers.Interface(MINT_ABI);
+      const amountWei = ethers.parseUnits(mintAmount, decimals);
+      const mintData = mintIface.encodeFunctionData("mint", [userAddress, amountWei]);
+
+      const mintTx = await signer.sendTransaction({ to: tokenAddress, data: mintData });
+      log("Mint transaction sent: " + mintTx.hash);
+      log("Waiting for confirmation...");
+      const mintReceipt = await provider.waitForTransaction(mintTx.hash);
+
+      if (mintReceipt.status === 1) {
+        log("Mint successful. " + mintAmount + " " + symbol + " minted to your wallet.", "ok");
+      } else {
+        log("Mint transaction reverted. Token was still deployed successfully above.", "err");
+      }
+    }
+
+    deployBtn.disabled = false;
+  } catch (e) {
+    log("Error: " + (e.shortMessage || e.message), "err");
+    deployBtn.disabled = false;
+  }
+};
+</script>
+
+</body>
+</html>
