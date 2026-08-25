@@ -1,4 +1,4 @@
-# deploy-b20
+# deploy-b20-on-base
 
 A single-file, no-install tool to deploy a [B20 token](https://docs.base.org/get-started/launch-b20-token) on Base, signed entirely through your own wallet. No private key ever touches this code.
 
